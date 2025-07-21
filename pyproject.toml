@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "baltic-shipping"
+version = "0.1.0"
+description = "Baltic Shipping vessel data scraping tool"
+authors = ["Rubén Fernández Fuertes <fernandezfuertteruben@gmail.com>"]
+readme = "README.md"
+packages = [{include = "baltic_shipping", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+playwright = "^1.44.0"
+beautifulsoup4 = "^4.12.3"
+pandas = "^2.2.2"
+tqdm = "^4.66.4"
+colorama = "^0.4.6"
+ipywidgets = "^8.1.7"
+ipykernel = "^6.29.5"
+rich = "^14.0.0"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.4"
+
+[tool.poetry.scripts]
+scrape = "mains.scraping.run_scraper:main"
+merge = "mains.processing.merge_jsons:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
