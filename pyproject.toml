@@ -16,13 +16,16 @@ colorama = "^0.4.6"
 ipywidgets = "^8.1.7"
 ipykernel = "^6.29.5"
 rich = "^14.0.0"
+aiohttp = "^3.12.15"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.4"
 
 [tool.poetry.scripts]
 scrape = "mains.scraping.run_scraper:main"
+scrape-fast = "mains.scraping.run_fast_scraper:run_fast"
 merge = "mains.processing.merge_jsons:main"
+analyze-discrepancy = "mains.processing.analyze_discrepancy:main"
 
 [build-system]
 requires = ["poetry-core"]

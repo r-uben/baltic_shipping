@@ -16,6 +16,7 @@ console = Console()
 def get_all_vessel_urls() -> list[str]:
     """
     Scrapes all vessel URLs from the main vessel listing page, handling pagination.
+    Fixed version with retry logic and proper navigation verification.
     """
     vessel_urls = []
     
@@ -27,15 +28,13 @@ def get_all_vessel_urls() -> list[str]:
             # First, navigate to the initial page to find the total number of vessels
             page.goto(config.VESSELS_URL, timeout=config.TIMEOUT)
             page.wait_for_load_state("networkidle")
-            
-            # Remove debug code - pagination is now working
 
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
             
             # Show Japanese-style banner
             banner = Panel(
-                Text("⛩️  Baltic Shipping Vessel Scanner  ⛩️\n🌊 Deep Ocean Data Collection System 🌊", 
+                Text("⛩️  Baltic Shipping Vessel Scanner v2.0  ⛩️\n🌊 Enhanced Deep Ocean Data Collection System 🌊", 
                      justify="center", style="bold cyan"),
                 border_style="blue",
                 padding=(1, 2)
@@ -62,14 +61,13 @@ def get_all_vessel_urls() -> list[str]:
             total_pages = math.ceil(total_vessels / vessels_per_page)
             
             console.print(f"🔍 [green]Discovered {total_vessels:,} vessels across {total_pages:,} pages[/green]")
-            console.print("🚀 [cyan]Initiating deep scan protocol...[/cyan]")
+            console.print("🚀 [cyan]Initiating enhanced deep scan protocol with retry logic...[/cyan]")
 
             current_page = 1
             max_pages = total_pages  # Get ALL pages - no limit
-            consecutive_duplicate_pages = 0
-            max_consecutive_duplicates = 10  # Increase tolerance for duplicate pages
-            recent_pages_vessels = []  # Track vessels from recent pages only
+            seen_vessels = set()  # Track all vessels we've seen to avoid duplicates
             start_time = time.time()
+            failed_pages = []  # Track failed pages for summary
             
             with Progress(
                 SpinnerColumn("dots12", style="cyan"),
@@ -83,82 +81,91 @@ def get_all_vessel_urls() -> list[str]:
                 console=console,
                 transient=False
             ) as progress:
-                task = progress.add_task("⛩️ Deep Ocean Scan", total=max_pages)
+                task = progress.add_task("⛩️ Enhanced Deep Ocean Scan", total=max_pages)
                 
                 while current_page <= max_pages:
-                    try:
-                        # Wait for page to load and get vessel links
-                        page.wait_for_load_state("networkidle")
-                        content = page.content()
-                        soup = BeautifulSoup(content, 'html.parser')
-                        
-                        vessel_links = soup.find_all('a', href=lambda x: x and '/vessel/imo/' in x)
-                        
-                        if not vessel_links:
-                            progress.update(task, description="[yellow]⚠️  No vessels detected[/yellow]")
-                            break
+                    # FIXED: Implement retry logic for each page
+                    page_success = False
+                    retry_count = 0
+                    max_retries = 3
                     
-                        page_vessels = []
-                        for link in vessel_links:
-                            href = link.get('href')
-                            if href:
-                                if href.startswith('/'):
-                                    full_url = config.BASE_URL + href
-                                else:
-                                    full_url = href
-                                page_vessels.append(full_url)
-                        
-                        page_vessels = list(dict.fromkeys(page_vessels))
-                        
-                        if not page_vessels:
-                            progress.update(task, description="[yellow]⚠️  Empty ocean detected[/yellow]")
-                            break
-                        
-                        new_vessels = [url for url in page_vessels if url not in vessel_urls]
-                        
-                        # Check if current page vessels are duplicates of recent pages (not all previous pages)
-                        is_duplicate_of_recent = False
-                        if current_page > 1 and len(recent_pages_vessels) > 0:
-                            # Check if all vessels on this page are in the last few pages
-                            recent_vessels_set = set(recent_pages_vessels)
-                            current_vessels_set = set(page_vessels)
-                            if current_vessels_set.issubset(recent_vessels_set):
-                                is_duplicate_of_recent = True
-                        
-                        if is_duplicate_of_recent and current_page > 1:
-                            consecutive_duplicate_pages += 1
-                            progress.update(task, description=f"[yellow]🔄 Echo waves detected ({consecutive_duplicate_pages}/{max_consecutive_duplicates})[/yellow]")
-                            
-                            if consecutive_duplicate_pages >= max_consecutive_duplicates:
-                                if current_page > max_pages * 0.9:  # If we're in the last 10% of pages
-                                    progress.update(task, description="[green]🏁 Ocean depths fully explored[/green]")
-                                    break
-                                else:
-                                    progress.update(task, description="[cyan]🌊 Navigating through echo zones[/cyan]")
-                                    consecutive_duplicate_pages = max_consecutive_duplicates - 5  # Reset but keep some count
-                        else:
-                            consecutive_duplicate_pages = 0  # Reset counter when new vessels are found
-                            progress.update(task, description=f"[green]🚢 Found {len(new_vessels)} vessels - scanning deeper[/green]")
-                        
-                        vessel_urls.extend(new_vessels)
-                        
-                        # Keep track of vessels from recent pages only (last 10 pages)
-                        recent_pages_vessels.extend(page_vessels)
-                        if len(recent_pages_vessels) > 90:  # Keep last ~10 pages worth (9 vessels per page)
-                            recent_pages_vessels = recent_pages_vessels[-90:]
-                        
-                        # Try to click the "Next" button to go to the next page
+                    while not page_success and retry_count < max_retries:
                         try:
-                            # The Next button is likely inside a li.next element
+                            # Wait for page to load and get vessel links
+                            page.wait_for_load_state("networkidle")
+                            
+                            # FIXED: Wait for specific page elements to ensure full load
+                            try:
+                                page.wait_for_selector("a[href*='/vessel/imo/']", timeout=10000)
+                            except:
+                                # If no vessel links found, might be end of results or error page
+                                pass
+                            
+                            content = page.content()
+                            soup = BeautifulSoup(content, 'html.parser')
+                            
+                            vessel_links = soup.find_all('a', href=lambda x: x and '/vessel/imo/' in x)
+                            
+                            page_vessels = []
+                            for link in vessel_links:
+                                href = link.get('href')
+                                if href:
+                                    if href.startswith('/'):
+                                        full_url = config.BASE_URL + href
+                                    else:
+                                        full_url = href
+                                    page_vessels.append(full_url)
+                            
+                            page_vessels = list(dict.fromkeys(page_vessels))
+                            
+                            # Filter out vessels we've already seen
+                            new_vessels = []
+                            duplicate_count = 0
+                            for url in page_vessels:
+                                if url not in seen_vessels:
+                                    new_vessels.append(url)
+                                    seen_vessels.add(url)
+                                    vessel_urls.append(url)
+                                else:
+                                    duplicate_count += 1
+                            
+                            if new_vessels:
+                                progress.update(task, description=f"[green]🚢 Page {current_page}: Found {len(new_vessels)} new vessels[/green]")
+                            elif duplicate_count > 0:
+                                progress.update(task, description=f"[yellow]🔄 Page {current_page}: {duplicate_count} duplicates - OK[/yellow]")
+                            elif not vessel_links:
+                                progress.update(task, description=f"[yellow]⚠️ Page {current_page}: No vessels - might be end[/yellow]")
+                            
+                            page_success = True  # Page processed successfully
+                            
+                        except Exception as e:
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                progress.update(task, description=f"[yellow]⚠️ Page {current_page} error (retry {retry_count}/{max_retries}): {str(e)[:30]}[/yellow]")
+                                time.sleep(2 * retry_count)  # Exponential backoff
+                            else:
+                                progress.update(task, description=f"[red]❌ Page {current_page} failed after {max_retries} retries[/red]")
+                                failed_pages.append(current_page)
+                                page_success = True  # Give up and move on
+                    
+                    # FIXED: Navigation logic with proper verification
+                    if current_page < max_pages:
+                        navigation_success = False
+                        
+                        # Store current page number to verify navigation worked
+                        old_page_num = current_page
+                        
+                        # Try to navigate to next page
+                        try:
+                            # Method 1: Try clicking "Next" button
                             next_selectors = [
-                                ".next a",  # Anchor inside .next li
-                                "li.next a",  # More specific
-                                ".pagination .next a",  # Even more specific
-                                ".page:has-text('2')",  # Try clicking page 2 directly
+                                ".next a",
+                                "li.next a", 
+                                ".pagination .next a",
                                 "a:has-text('Next')"
                             ]
-                            next_button = None
                             
+                            next_button = None
                             for selector in next_selectors:
                                 try:
                                     button = page.locator(selector).first
@@ -168,44 +175,51 @@ def get_all_vessel_urls() -> list[str]:
                                 except:
                                     continue
                             
-                            # If no Next button, try clicking page number "2"
-                            if not next_button and current_page == 1:
-                                try:
-                                    page_2 = page.locator("a.page:has-text('2')").first
-                                    if page_2.is_visible():
-                                        next_button = page_2
-                                except:
-                                    pass
-                            
                             if next_button:
                                 next_button.click()
-                                current_page += 1
-                                progress.update(task, advance=1)
-                                page.wait_for_timeout(3000)  # Wait for page transition
-                            else:
-                                progress.update(task, description="[red]⛩️ Navigation path exhausted[/red]")
-                                break
-                        except Exception as e:
-                            progress.update(task, description=f"[red]❌ Navigation error: {str(e)[:30]}[/red]")
-                            break
-
-                    except Exception as e:
-                        progress.update(task, description=f"[red]❌ Scanning error: {str(e)[:30]}[/red]")
-                        break
+                                # FIXED: Wait for navigation to complete with verification
+                                try:
+                                    # Wait for URL to change or page content to update
+                                    page.wait_for_function(
+                                        f"document.querySelector('.pagination .active') && document.querySelector('.pagination .active').textContent.trim() == '{current_page + 1}'",
+                                        timeout=10000
+                                    )
+                                    navigation_success = True
+                                except:
+                                    # Fallback verification - check if vessel links changed
+                                    new_content = page.content()
+                                    if new_content != content:
+                                        navigation_success = True
+                            
+                            # Method 2: If button click failed, try direct URL navigation
+                            if not navigation_success:
+                                progress.update(task, description=f"[yellow]⚠️ Click navigation failed, trying URL method[/yellow]")
+                                next_url = f"{config.VESSELS_URL}?page={current_page + 1}"
+                                page.goto(next_url, timeout=config.TIMEOUT)
+                                page.wait_for_load_state("networkidle")
+                                navigation_success = True
+                                
+                        except Exception as nav_e:
+                            progress.update(task, description=f"[red]❌ Navigation failed for page {current_page}: {str(nav_e)[:30]}[/red]")
+                            failed_pages.append(f"nav_{current_page}")
+                    
+                    # FIXED: Only increment page counter once, regardless of navigation method
+                    current_page += 1
+                    progress.update(task, advance=1)
             
                 # Final completion
-                progress.update(task, description="[green]⛩️ Deep scan complete - analyzing discoveries[/green]")
-                
-            vessel_urls = list(dict.fromkeys(vessel_urls))
+                progress.update(task, description="[green]⛩️ Enhanced deep scan complete - analyzing discoveries[/green]")
             
             # Show completion summary
             elapsed = time.time() - start_time
-            console.print(f"\n🎌 [green]Mission accomplished![/green]")
+            console.print(f"\n🎌 [green]Enhanced mission accomplished![/green]")
             console.print(f"⛩️  [cyan]Discovered {len(vessel_urls):,} unique vessels[/cyan]")
             console.print(f"🌊 [blue]Scan duration: {elapsed/60:.1f} minutes[/blue]")
+            if failed_pages:
+                console.print(f"⚠️  [yellow]Failed pages: {len(failed_pages)} ({failed_pages[:10]}{'...' if len(failed_pages) > 10 else ''})[/yellow]")
             
         except Exception as e:
-            console.print(f"\n❌ [red]Critical error in deep scan: {e}[/red]")
+            console.print(f"\n❌ [red]Critical error in enhanced deep scan: {e}[/red]")
             raise
         finally:
             browser.close()
